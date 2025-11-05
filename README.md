@@ -20,6 +20,7 @@ pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https
 modelscope download --model facebook/sam-vit-base --local_dir /mnt/workspace/models/facebook/sam-vit-base
 ```
 #### 2.1.3 权重兼容情况
+详细分析记录见wweight_handle目录
 | 模型权重格式 | 是否兼容 |
 | --- | --- |
 | .pth | √ |
@@ -38,7 +39,9 @@ modelscope download --model facebook/sam-vit-base --local_dir /mnt/workspace/mod
 modelscope download --model AI-ModelScope/clip-vit-large-patch14 --local_dir /mnt/workspace/models/openai/clip-vit-large-patch14
 ```
 #### 2.2.3 权重兼容情况
+详细分析记录见wweight_handle目录
 | 模型权重格式 | 是否兼容 |
 | --- | --- |
 | .bin | √ |
 | .safetensor | √ |
+#### 2.2.4 模型权重转换
