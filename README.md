@@ -26,6 +26,10 @@ modelscope download --model facebook/sam-vit-base --local_dir /mnt/workspace/mod
 | .pth | √ |
 | .bin | X |
 | .safetensor | X |
+#### 2.1.4 模型权重转换
+- 只取 ```image_encoder.``` 开头的key
+- 去除 ```image_encoder.``` 前缀
+- shape 已确认一致
 
 ### 2.2 CLIP-large
 #### 2.2.1 相关资料
@@ -38,10 +42,36 @@ modelscope download --model facebook/sam-vit-base --local_dir /mnt/workspace/mod
 ```
 modelscope download --model AI-ModelScope/clip-vit-large-patch14 --local_dir /mnt/workspace/models/openai/clip-vit-large-patch14
 ```
+```
+modelscope download --model AI-ModelScope/clip-vit-large-patch14-336 --local_dir /mnt/workspace/models/openai/clip-vit-large-patch14-336
+```
 #### 2.2.3 权重兼容情况
-详细分析记录见wweight_handle目录
+详细分析记录见weight_analysis目录
 | 模型权重格式 | 是否兼容 |
 | --- | --- |
 | .bin | √ |
 | .safetensor | √ |
 #### 2.2.4 模型权重转换
+- 只取 ```vision_model.```开头的key
+- 去除 ```vision_model.``` 前缀
+- 去除后的key如果 ```encoder.```开头则替换为```transformer.```开头
+- qkv矩阵合并
+    - layerid 从0至23
+
+for k in sorted(state_dict_clip_bin_processed.keys()):
+    print(f"{k}, {state_dict_clip_bin_processed[k].shape}")
+    
+原始Key
+```
+transformer.layers.0.self_attn.q_proj.bias, torch.Size([1024])
+transformer.layers.0.self_attn.q_proj.weight, torch.Size([1024, 1024])
+transformer.layers.0.self_attn.k_proj.bias, torch.Size([1024])
+transformer.layers.0.self_attn.k_proj.weight, torch.Size([1024, 1024])
+transformer.layers.0.self_attn.v_proj.bias, torch.Size([1024])
+transformer.layers.0.self_attn.v_proj.weight, torch.Size([1024, 1024])
+```
+合并后Key
+```
+transformer.layers.0.self_attn.qkv_proj.bias, torch.Size([3072])
+transformer.layers.0.self_attn.qkv_proj.weight, torch.Size([3072, 1024])
+```
