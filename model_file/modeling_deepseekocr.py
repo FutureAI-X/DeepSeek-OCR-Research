@@ -895,8 +895,12 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
                 """process the global view"""
                 if image_size <= 640:
                     print('directly resize')
+                    # 图片直接 resize 会引起导致拉伸或压缩
                     image = image.resize((image_size, image_size))
                 # else:
+                # 图片进行padding操作:
+                # 1. 首先对整张图进行resize(保持宽高比, 将长边resize到image_size)
+                # 2. 将短边使用指定颜色进行填充
                 global_view = ImageOps.pad(image, (image_size, image_size),
                                         color=tuple(int(x * 255) for x in image_transform.mean))
                 images_list.append(image_transform(global_view).to(torch.bfloat16))
