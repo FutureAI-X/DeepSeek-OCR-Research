@@ -170,9 +170,24 @@ def find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_
 
 
 def dynamic_preprocess(image, min_num=2, max_num=9, image_size=640, use_thumbnail=False):
+    """动态图像预处理
+    
+    Args:
+        image: PIL.Image: 原始图像
+        min_num: int: 最小分割块数
+        max_num: int: 最大分割块数
+        image_size: int: 每个分割块的目标尺寸
+        use_thumbnail: bool: 是否添加缩略图
+
+    Returns:
+        processed_images (list): 处理后的图像列表
+        target_aspect_ratio (tuple): 目标宽高比
+    """
+    # 1. 获取原始图像的宽度和高度, 并计算宽高比
     orig_width, orig_height = image.size
     aspect_ratio = orig_width / orig_height
 
+    # 2. 使用列表推导式生成所有可能的分割比例
     # calculate the existing image aspect ratio
     target_ratios = set(
         (i, j) for n in range(min_num, max_num + 1) for i in range(1, n + 1) for j in range(1, n + 1) if
@@ -180,18 +195,23 @@ def dynamic_preprocess(image, min_num=2, max_num=9, image_size=640, use_thumbnai
     # print(target_ratios)
     target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
 
+    # 3. 找到与原始图像宽高比最接近的分割方法
     # find the closest aspect ratio to the target
     target_aspect_ratio = find_closest_aspect_ratio(
         aspect_ratio, target_ratios, orig_width, orig_height, image_size)
 
+    # 4. 计算目标宽度和高度, 同时计算总分割块数
     # print(target_aspect_ratio)
     # calculate the target width and height
     target_width = image_size * target_aspect_ratio[0]
     target_height = image_size * target_aspect_ratio[1]
     blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
 
+    # 5. 将图像resize到目标尺寸
     # resize the image
     resized_img = image.resize((target_width, target_height))
+
+    # 6. 将图像分割成多个块
     processed_images = []
     for i in range(blocks):
         box = (
@@ -204,9 +224,13 @@ def dynamic_preprocess(image, min_num=2, max_num=9, image_size=640, use_thumbnai
         split_img = resized_img.crop(box)
         processed_images.append(split_img)
     assert len(processed_images) == blocks
+    
+    # 7. 如果需要添加缩略图, 则生成一个缩略图
     if use_thumbnail and len(processed_images) != 1:
         thumbnail_img = image.resize((image_size, image_size))
         processed_images.append(thumbnail_img)
+    
+    # 8. 返回处理后的图像列表和分割比例
     return processed_images, target_aspect_ratio
 
 
@@ -701,11 +725,29 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
 
 
     def infer(self, tokenizer, prompt='', image_file='', output_path = '', base_size=1024, image_size=640, crop_mode=True, test_compress=False, save_results=False, eval_mode=False):
-        self.disable_torch_init()
+        """推理接口
+        
+        Args:
+            tokenizer (transformers.PreTrainedTokenizer): 分词器
+            prompt str: 输入文本
+            image_file str: 图片文件路径
+            output_path str: 输出结果保存路径
+            base_size int: 全局视图(glonal view)的尺寸, 默认1024*1024
+            image_size int: 局部视图(local view)的尺寸, 默认640*640
+            crop_mode bool: 是否进行裁剪, 默认True
+            test_compress bool: 是否打印[图像token数] vs [输出文本数]的压缩率, 默认False
+            save_results bool: 是否将结果(含标注图、Markdown等)保存到此番, 默认False
+            eval_mode bool: 是否为评估模式(影响streamer和后处理), 默认False
 
+        """
+        # 一 初始化与路径创建
+        # 1. 可能是为了在推理时禁用某些 PyTorch 初始化（比如避免重复加载权重）
+        self.disable_torch_init()
+        # 2. 创建输出目录
         os.makedirs(output_path, exist_ok=True)
         os.makedirs(f'{output_path}/images', exist_ok=True)
 
+        # 二 构建对话结构
         if prompt and image_file:
             conversation = [
                 {
@@ -720,7 +762,6 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
                 },
                 {"role": "<|Assistant|>", "content": ""},
             ]
-        
         elif prompt:
             conversation = [
                 {
@@ -737,57 +778,75 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
             ]
         else:
             assert False, f'prompt is none!'
-        
+        # 将对话转换为模型可接受的 plain 文本格式，如：'<image>\nExtract the text in the image.'
         prompt = format_messages(conversations=conversation, sft_format='plain', system_prompt='')
 
-        patch_size = 16
-        downsample_ratio = 4
+        # 三 图像加载与基本处理
+        # 1. 加载对话中所有图像
         images = load_pil_images(conversation)
-
-        valid_img_tokens = 0
-        ratio = 1
-
+        # 2. 获取第一张图像宽高比
         image_draw = images[0].copy()
-
         w,h = image_draw.size
-        # print(w, h)
+        ratio = 1
         ratio = 1 - ((max(w, h) - min(w, h)) / (max(w, h)))
-    
 
-        image_transform=BasicImageTransform(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5), normalize=True)
-        images_seq_mask = []
-
+        # 四 构建模型输入
+        # 4.1 把 prompt 按照 `image_token` 分割成多个部分
         image_token = '<image>'
         image_token_id = 128815
         text_splits = prompt.split(image_token)
 
-        images_list, images_crop_list, images_seq_mask = [], [], []
-        tokenized_str = []
-        images_spatial_crop = []
-        for text_sep, image in zip(text_splits, images):
+        # 4.2 参数准备
+        tokenized_str = []          # 输入模型的 token_id 字符串数组
+        
+        images_seq_mask = []        # 长度与tokenized_str相同，记录每个位置的token是文字还是图像，True为图像，False为文字
+        images_list = []            # 全局视图图像列表, 元素是张量
+        images_crop_list = []       # 局部视图图像列表, 元素是张量
+        images_spatial_crop = []    # 存放每张图被切成多少块，如[[2,2]]表示第一张图被切成了2*2
 
+        patch_size = 16             # 每个patch的尺寸
+        downsample_ratio = 4        # 下采样比例
+        valid_img_tokens = 0        # 根据全局+局部视图动态计算有效图像信息量
+        image_transform=BasicImageTransform(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5), normalize=True)
+
+        # 4.3 主循环: 处理每段文本+图像
+        # 注意：
+        # - 这里 len(text_splits) == len(images) + 1，因为图像插在文本中间。
+        # - 但代码中 images 只有一个（来自 conversation[0]["images"]），所以实际上只处理第一个 <image>
+        # - 每次循环的对象是[一个文本片段], [紧跟该片段的图像]
+        for text_sep, image in zip(text_splits, images):
+            # 1. 处理纯文本
+            # (1) 文本token化
             tokenized_sep = text_encode(tokenizer, text_sep, bos=False, eos=False)
+            # (2) 添加到 tokenized_str 中
             tokenized_str += tokenized_sep
+            # (3) 记录该文本是图像还是文本
             images_seq_mask += [False] * len(tokenized_sep)
 
-            if crop_mode:
+            # 2. 处理图像
+            if crop_mode:   # 裁剪模式
 
+                # (1) 如果图片的宽高都小于等于640，则不进行裁剪
                 if image.size[0] <= 640 and image.size[1] <= 640:
                     crop_ratio = [1, 1]
-
+                # (2) 否则进行裁剪
                 else:
                     if crop_mode:
                         # best_width, best_height = select_best_resolution(image.size, self.candidate_resolutions)
+                        # images_crop_raw (list): 裁剪后的图片列表
+                        # crop_ratio (tuple): 裁剪形状
                         images_crop_raw, crop_ratio = dynamic_preprocess(image)
-                    else:
+                    else:   # 永远不会走到
                         # best_width, best_height = self.image_size, self.image_size
                         crop_ratio = [1, 1]
-                
+                # (3) 处理全局视图
                 """process the global view"""
+                # - 图片进行padding操作
                 # image = image.resize((base_size, base_size))
                 global_view = ImageOps.pad(image, (base_size, base_size),
                                         color=tuple(int(x * 255) for x in image_transform.mean))
                 
+                # - 设置有效img_tokens
                 if base_size == 1024:
                     valid_img_tokens += int(256 * ratio)
                 elif base_size == 1280:
@@ -795,47 +854,41 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
                 # elif base_size == 640:
                 #     valid_img_tokens += int(100 * ratio)
                 
-
-
-
-                
+                # - 将全局视图添加到 images_list 中
                 images_list.append(image_transform(global_view).to(torch.bfloat16))
 
-                # global_view_tensor = image_transform(global_view).to(torch.bfloat16)
-
+                # - 将图像的裁剪比例添加到 images_spatial_crop 中
                 width_crop_num, height_crop_num = crop_ratio
-
                 images_spatial_crop.append([width_crop_num, height_crop_num])
                 
-                
+                # (4) 处理局部视图
                 if width_crop_num > 1 or height_crop_num > 1:
                     """process the local views"""
-                    
                     for i in range(len(images_crop_raw)):
                         images_crop_list.append(image_transform(images_crop_raw[i]).to(torch.bfloat16))
-                
                 if image_size == 640:
                     valid_img_tokens += len(images_crop_list) * 100
 
+                # (5) 图像token计算
+                # - 计算每个局部视图patch的数量
                 num_queries = math.ceil((image_size // patch_size) / downsample_ratio)
+                # - 计算每个全局视图patch的数量
                 num_queries_base = math.ceil((base_size // patch_size) / downsample_ratio)
 
-
-
                 """add image tokens"""
-
-                
-
+                # - 设置全局视图的token数组
                 tokenized_image = ([image_token_id] * num_queries_base + [image_token_id]) * num_queries_base
                 tokenized_image += [image_token_id]
+                # - 设置局部视图的token数组
                 if width_crop_num > 1 or height_crop_num > 1:
                     tokenized_image += ([image_token_id] * (num_queries * width_crop_num) + [image_token_id]) * (
                                 num_queries * height_crop_num)
+                # - 将图片token添加到 tokenized_str 中
                 tokenized_str += tokenized_image
+                # - 记录图像掩码
                 images_seq_mask += [True] * len(tokenized_image)
                 # num_image_tokens.append(len(tokenized_image))
-
-            else:
+            else:           # 非裁剪模式
                 # best_width, best_height = self.image_size, self.image_size
                 # print(image.size, (best_width, best_height)) # check the select_best_resolutions func
 
@@ -873,31 +926,28 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
                 images_seq_mask += [True] * len(tokenized_image)
                 # num_image_tokens.append(len(tokenized_image))
         
-
+        # 4.4 最后一个文本块的token化
         """process the last text split"""
         tokenized_sep = text_encode(tokenizer, text_splits[-1], bos=False, eos=False)
         tokenized_str += tokenized_sep
         images_seq_mask += [False] * len(tokenized_sep)
 
+        # 4.5 添加BOS
         """add the bos tokens"""
         bos_id = 0
         tokenized_str = [bos_id] + tokenized_str 
         images_seq_mask = [False] + images_seq_mask
 
-
-
+        # 4.6 将token和mask转换为tensor
         input_ids = torch.LongTensor(tokenized_str)
-
-
-        
-
         images_seq_mask = torch.tensor(images_seq_mask, dtype=torch.bool)
 
-
+        # 4.7 准备输入模型的图片数据
+        # 如果没有图像，用零张量填充
         if len(images_list) == 0:
-            images_ori = torch.zeros((1, 3, image_size, image_size))
-            images_spatial_crop = torch.zeros((1, 2), dtype=torch.long)
-            images_crop = torch.zeros((1, 3, base_size, base_size))
+            images_ori = torch.zeros((1, 3, image_size, image_size))        # 存放所有的全局视图，每个<image>对应一个
+            images_spatial_crop = torch.zeros((1, 2), dtype=torch.long)     # 存放每张图被切成多少块，如[[2,2]]表示第一张图被切成了2*2
+            images_crop = torch.zeros((1, 3, base_size, base_size))         # 存放所有的局部视图
 
         else:
             images_ori = torch.stack(images_list, dim=0)
@@ -906,8 +956,6 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
                 images_crop = torch.stack(images_crop_list, dim=0)
             else:
                 images_crop = torch.zeros((1, 3, base_size, base_size))
-
-
 
         if not eval_mode:
             streamer = NoEOSTextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=False)
@@ -927,7 +975,6 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
                         no_repeat_ngram_size = 20,
                         use_cache = True
                         )
-
         else:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 with torch.no_grad():

@@ -2,6 +2,11 @@ from typing import List
 from addict import Dict
 from PIL import Image, ImageOps
 from abc import ABC
+from typing import Optional, Tuple
+from torchvision import transforms
+import torch
+import torch.nn as nn
+
 
 def load_image(image_path):
     """使用PIL加载图像"""
@@ -70,6 +75,20 @@ class BaseTransform(ABC):
     @property
     def default_shape(self):
         raise NotImplementedError
+
+def normalize_transform(mean, std):
+    if mean is None and std is None:
+        transform = None
+    elif mean is None and std is not None:
+        mean = [0.] * len(std)
+        transform = transforms.Normalize(mean=mean, std=std)
+    elif mean is not None and std is None:
+        std = [1.] * len(mean)
+        transform = transforms.Normalize(mean=mean, std=std)
+    else:
+        transform = transforms.Normalize(mean=mean, std=std)
+
+    return transform
 
 
 class BasicImageTransform(BaseTransform):
