@@ -25,17 +25,25 @@ import time
 
 
 def load_image(image_path):
+    """加载图片
+    
+    Args:
+        image_path: str: 图片路径
 
+    Returns:
+        image: PIL.Image: 加载的图片
+    """
     try:
+        # 根据路径获取图像
         image = Image.open(image_path)
-        
+        # 对图像进行EXIF方向校正，有些图像文件包含EXIF元数据，中可以指定图像应该被旋转或翻转的方式以正确显示。这个函数会自动应用这些变换。
         corrected_image = ImageOps.exif_transpose(image)
-        
+        # 返回经过方向矫正后的图像对象
         return corrected_image
-        
     except Exception as e:
         print(f"error: {e}")
         try:
+            # 重新打开图像
             return Image.open(image_path)
         except:
             return None
@@ -180,8 +188,8 @@ def dynamic_preprocess(image, min_num=2, max_num=9, image_size=640, use_thumbnai
         use_thumbnail: bool: 是否添加缩略图
 
     Returns:
-        processed_images (list): 处理后的图像列表
-        target_aspect_ratio (tuple): 目标宽高比
+        processed_images (List[PIL.Image]): 处理后的图像列表
+        target_aspect_ratio (tuple 元组): 目标宽高比, 如(2,2)
     """
     # 1. 获取原始图像的宽度和高度, 并计算宽高比
     orig_width, orig_height = image.size
@@ -321,6 +329,8 @@ def load_pil_images(conversations: List[Dict[str, str]]) -> List[Image.Image]:
             
             # pil_img = Image.open(image_path)
             pil_img = load_image(image_path)
+            # convert() 方法：这是PIL中 Image 类的一个方法，用于将图像转换为不同的色彩模式。
+            # 色彩模式指的是图像如何表示颜色的方式。常见的模式包括 "RGB"（真彩色）、"RGBA"（带有透明度的真彩色）、"L"（灰度）、"CMYK"（印刷四色模式）等。
             pil_img = pil_img.convert("RGB")
             pil_images.append(pil_img)
 
@@ -328,7 +338,14 @@ def load_pil_images(conversations: List[Dict[str, str]]) -> List[Image.Image]:
 
 
 class BaseTransform(ABC):
+    """"Base class for transform.
+    
+    ABC(Abstract Base Class) 是一种抽象类，它是用于定义接口规范和实现抽象类的一种机制。它的主要作用是：强制子类实现特定的方法或属性，从而保证接口的一致性。
+    - ABC: 一个基类，用于继承
+    - @abstractmethod: 这是一个装饰器，用于定义抽象方法
 
+    当前这个类其时写的不规范
+    """
     def set_rng(self, *args, **kwargs):
         pass
 
@@ -341,6 +358,17 @@ class BaseTransform(ABC):
 
 
 class BasicImageTransform(BaseTransform):
+    """Base class for image transform.
+    
+    核心作用: 将原始图像（如 PIL Image 或 NumPy 数组）标准化并转换为 PyTorch 张量, 以便输入神经网络模型
+
+    1. transforms.ToTensor()
+    - 作用：将输入图像（通常是 PIL.Image 或 np.ndarray, 像素值范围 [0, 255]）转换为 torch.Tensor
+    - 输出格式：
+        - 形状：(C, H, W)（通道在前）
+        - 数据类型: torch.float32
+        - 像素值归一化到 [0.0, 1.0]（通过除以 255 实现）
+    """
     def __init__(
         self, 
         mean: Optional[Tuple[float, float, float]] = (0.5, 0.5, 0.5),
@@ -354,10 +382,13 @@ class BasicImageTransform(BaseTransform):
             transforms.ToTensor()
         ]
 
+        # 张量标准化组件
         normalize = normalize_transform(mean, std) if normalize else nn.Identity()
         if normalize is not None:
             transform_pipelines.append(normalize)
 
+        # 将多个变换操作按顺序串联成一个整体 pipeline
+        # 调用时自动依次执行
         self.transform = transforms.Compose(transform_pipelines)
     
     def __call__(self, x):
@@ -389,10 +420,6 @@ class DeepseekOCRModel(DeepseekV2Model):
         embed_std = 1 / torch.sqrt(torch.tensor(n_embed, dtype=torch.float32))
         self.image_newline = nn.Parameter(torch.randn(n_embed) * embed_std)
         self.view_seperator = nn.Parameter(torch.randn(n_embed) * embed_std)
-
-
-
-    
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -408,39 +435,39 @@ class DeepseekOCRModel(DeepseekV2Model):
         images_spatial_crop: Optional[torch.FloatTensor] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-
-
-
-
         if inputs_embeds is None:
             # inputs_embeds = self.embed_tokens(input_ids)
             inputs_embeds = self.get_input_embeddings()(input_ids)
-
-
 
         sam_model = getattr(self, 'sam_model', None)
         # sam_model = self.sam_model
         vision_model = getattr(self, 'vision_model', None)
 
-
-
+        # 视觉token处理, 同时满足以下条件才进行处理
+        # 1. sam_model 不为空
+        # 2. 输入的input_ids的shape[1] != 1: 表示输入长度是否不等于1 or 是否处于训练模式
+        # 3. 存在图像
         if sam_model is not None and (input_ids.shape[1] != 1 or self.training) and torch.sum(images[0][1]).item() != 0:
 
             idx = 0
-            
             # sam_model = torch.jit.script(sam_model)
-            
             # start_time = time.time()
+            # 循环处理每一张图像
             for image, crop_shape in zip(images, images_spatial_crop):
                 images_in_this_batch = []
 
+                # 所有的分片
                 patches = image[0]
+                # 原始图像
                 image_ori = image[1]
 
+                # 禁用梯度计算
                 with torch.no_grad():
                 # with torch.inference_mode(): 
                     
+                    # 当存在 patches 时
                     if torch.sum(patches).item() != 0:
+                        # 局部特征提取
                         # P, C, H, W = patches.shape
                         crop_flag = 1
                         local_features_1 = sam_model(patches)
@@ -450,7 +477,7 @@ class DeepseekOCRModel(DeepseekV2Model):
                         local_features = torch.cat((local_features_2[:, 1:], local_features_1.flatten(2).permute(0, 2, 1)), dim=-1) 
                         local_features = self.projector(local_features)
 
-
+                        # 全局特征提取
                         global_features_1 = sam_model(image_ori)
                         global_features_2 = vision_model(image_ori, global_features_1) 
                         global_features = torch.cat((global_features_2[:, 1:], global_features_1.flatten(2).permute(0, 2, 1)), dim=-1) 
@@ -493,7 +520,6 @@ class DeepseekOCRModel(DeepseekV2Model):
                         # print('all: ', end_time - start_time)
 
                         # exit()
-                   
                     else:
                         global_features_1 = sam_model(image_ori)
                         global_features_2 = vision_model(image_ori, global_features_1) 
@@ -782,7 +808,7 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
         prompt = format_messages(conversations=conversation, sft_format='plain', system_prompt='')
 
         # 三 图像加载与基本处理
-        # 1. 加载对话中所有图像
+        # 1. 加载对话中所有图像 List[PIL.Image]
         images = load_pil_images(conversation)
         # 2. 获取第一张图像宽高比
         image_draw = images[0].copy()
@@ -800,8 +826,8 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
         tokenized_str = []          # 输入模型的 token_id 字符串数组
         
         images_seq_mask = []        # 长度与tokenized_str相同，记录每个位置的token是文字还是图像，True为图像，False为文字
-        images_list = []            # 全局视图图像列表, 元素是张量
-        images_crop_list = []       # 局部视图图像列表, 元素是张量
+        images_list = []            # 全局视图图像列表, 元素是张量 [C, H, W]
+        images_crop_list = []       # 局部视图图像列表, 元素是张量 [C, H, W]
         images_spatial_crop = []    # 存放每张图被切成多少块，如[[2,2]]表示第一张图被切成了2*2
 
         patch_size = 16             # 每个patch的尺寸
@@ -825,7 +851,6 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
 
             # 2. 处理图像
             if crop_mode:   # 裁剪模式
-
                 # (1) 如果图片的宽高都小于等于640，则不进行裁剪
                 if image.size[0] <= 640 and image.size[1] <= 640:
                     crop_ratio = [1, 1]
@@ -833,15 +858,15 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
                 else:
                     if crop_mode:
                         # best_width, best_height = select_best_resolution(image.size, self.candidate_resolutions)
-                        # images_crop_raw (list): 裁剪后的图片列表
-                        # crop_ratio (tuple): 裁剪形状
+                        # images_crop_raw (List[PIL.Image]): 裁剪后的图片列表
+                        # crop_ratio (元组): 裁剪形状
                         images_crop_raw, crop_ratio = dynamic_preprocess(image)
                     else:   # 永远不会走到
                         # best_width, best_height = self.image_size, self.image_size
                         crop_ratio = [1, 1]
                 # (3) 处理全局视图
                 """process the global view"""
-                # - 图片进行padding操作
+                # - 图片进行padding操作（pad相当于resize+pad）
                 # image = image.resize((base_size, base_size))
                 global_view = ImageOps.pad(image, (base_size, base_size),
                                         color=tuple(int(x * 255) for x in image_transform.mean))
@@ -943,7 +968,9 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
         images_seq_mask = [False] + images_seq_mask
 
         # 4.6 将token和mask转换为tensor
+        # [text_token_id1_1, ..., text_token_1_n, image_token_id_1_1, ..., image_token_id_1_n, text_token_id2_1, ...]
         input_ids = torch.LongTensor(tokenized_str)
+        # [False, ..., False, True, ..., True, False, ...]
         images_seq_mask = torch.tensor(images_seq_mask, dtype=torch.bool)
 
         # 4.7 准备输入模型的图片数据
@@ -1016,7 +1043,6 @@ class DeepseekOCRForCausalLM(DeepseekV2ForCausalLM):
             print('output texts tokens (valid): ', pure_texts_outputs_token_length)
             print('compression ratio: ', round(pure_texts_outputs_token_length/valid_img_tokens, 2))
             print('='*50)
-
 
         if '<image>' in conversation[0]['content'] and save_results:
             outputs = tokenizer.decode(output_ids[0, input_ids.unsqueeze(0).cuda().shape[1]:])
