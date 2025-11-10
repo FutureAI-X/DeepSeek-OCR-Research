@@ -6,27 +6,46 @@ from typing import Optional, Tuple
 from torchvision import transforms
 import torch
 import torch.nn as nn
+import numpy as np
 
 
-def load_image(image_path):
-    """使用PIL加载图像"""
+def pil_to_np(image: Image.Image):
+    return np.array(image)
+
+def load_image_pil_normal(image_path):
+    """使用PIL加载图像(普通模式)"""
     try:
-        # 1. 尝试使用 Pillow 库的 Image.open() 打开指定路径的图像文件
-        # 此时图像已加载到内存，但可能方向不正确（例如手机拍摄的照片带有 EXIF 旋转信息）。
-        image = Image.open(image_path)
+        return Image.open(image_path)
+    except Exception as e:
+        print(f"图片加载异常: {e}")
+        return None
+
+def load_image_pil_exif(image_path):
+    """使用PIL加载图像(矫正模式)
+
+    使用 ImageOps.exif_transpose() 自动根据图像的 EXIF 元数据（如旋转、翻转信息）对图像进行矫正。
+    比如：一张手机竖拍的照片，在不矫正的情况下显示为横的，这个函数会自动将其旋转为正确的方向。
+    """
+    # 1. 尝试使用 Pillow 库的 Image.open() 打开指定路径的图像文件
+    # 此时图像已加载到内存，但可能方向不正确（例如手机拍摄的照片带有 EXIF 旋转信息）。
+    image = load_image_pil_normal(image_path)
+    if image is None:
+        return None
+    
+    try:
         # 2. 使用 ImageOps.exif_transpose() 自动根据图像的 EXIF 元数据（如旋转、翻转信息）对图像进行矫正。
         # 比如：一张手机竖拍的照片，在不矫正的情况下显示为横的，这个函数会自动将其旋转为正确的方向。
-        corrected_image = ImageOps.exif_transpose(image)
-        # 3. 返回经过方向矫正后的图像对象
-        return corrected_image
+        return ImageOps.exif_transpose(image)
     except Exception as e:
-        print(f"error: {e}")
-        try:
-            return Image.open(image_path)
-        except:
-            return None
+        print(f"图片矫正异常: {e}")
+        return image
+        
+def load_image_pil_rgb(image_path):
+    """使用PIL加载图像(RGB模式)"""
+    pil_img = load_image_pil_exif(image_path)
+    return pil_img.convert("RGB")
 
-def load_pil_images(conversations: List[Dict[str, str]]) -> List[Image.Image]:
+def load_images_pil_rgb(conversations: List[Dict[str, str]]) -> List[Image.Image]:
     """使用PIL加载图像
 
     Args:
@@ -58,9 +77,7 @@ def load_pil_images(conversations: List[Dict[str, str]]) -> List[Image.Image]:
             # exit()
             
             # pil_img = Image.open(image_path)
-            pil_img = load_image(image_path)
-            pil_img = pil_img.convert("RGB")
-            pil_images.append(pil_img)
+            pil_images.append(load_image_pil_rgb(image_path))
 
     return pil_images
 
