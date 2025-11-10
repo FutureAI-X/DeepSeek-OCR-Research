@@ -1,0 +1,3 @@
+{"messages": [{"role": "user", "content": "<image>\nExtract the text in the image."}, {"role": "assistant", "content": "豫章故郡，洪都新府。星分翼轸，地接衡庐。襟三江而带五湖..."}], "images": ["/home/guoteng/code/DeepSeek-OCR-Research/train_data/images/tengwangge.png"]}
+{"messages": [{"role": "user", "content": "<image>\nExtract the text in the image."}, {"role": "assistant", "content": "豫章故郡，洪都新府。星分翼轸，地接衡庐。襟三江而带五湖..."}], "images": ["/home/guoteng/code/DeepSeek-OCR-Research/train_data/images/tengwangge.png"]}
+{"messages": [{"role": "user", "content": "<image>\nExtract the text in the image."}, {"role": "assistant", "content": "豫章故郡，洪都新府。星分翼轸，地接衡庐。襟三江而带五湖..."}], "images": ["/home/guoteng/code/DeepSeek-OCR-Research/train_data/images/tengwangge.png"]}
