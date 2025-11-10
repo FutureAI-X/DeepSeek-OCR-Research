@@ -29,7 +29,7 @@ class DeepseekOCRModel(Qwen3Model):
 
         # 投影层设置
         # 创建一个多层感知机投影器，将视觉特征从 2048 维映射到 1280 维，与语言模型的嵌入维度对齐。
-        n_embed = 1280
+        n_embed = config.hidden_size
         self.projector =  nn.Linear(2048, n_embed)
 
         embed_std = 1 / torch.sqrt(torch.tensor(n_embed, dtype=torch.float32))
@@ -56,6 +56,43 @@ class DeepseekOCRModel(Qwen3Model):
         sam_model = getattr(self, 'sam_model', None)
         vision_model = getattr(self, 'vision_model', None)
 
+        if images is not None:
+            # idx表示当前批次中的第几个条数据
+            idx = 0
+
+            for image, crop_shape in zip(images, images_spatial_crop):
+                images_in_this_batch = []
+                # 所有的分片
+                patches = image[0]
+                # 原始图像
+                image_ori = image[1]
+
+                global_features_1 = sam_model(image_ori)
+                global_features_2 = vision_model(image_ori, global_features_1) 
+                global_features = torch.cat((global_features_2[:, 1:], global_features_1.flatten(2).permute(0, 2, 1)), dim=-1) 
+                global_features = self.projector(global_features)
+                print('=====================')
+                print('BASE: ', global_features.shape)
+                print('NO PATCHES')
+                print('=====================')
+                _, hw, n_dim = global_features.shape
+                h = w = int(hw ** 0.5)
+
+                global_features = global_features.view(h, w, n_dim)
+
+                global_features = torch.cat(
+                    [global_features, self.image_newline[None, None, :].expand(h, 1, n_dim)], dim=1
+                )
+                global_features = global_features.view(-1, n_dim)
+                global_local_features = torch.cat([global_features, self.view_seperator[None, :]], dim=0)
+
+                images_in_this_batch.append(global_local_features)
+
+                if images_in_this_batch:
+                    images_in_this_batch = torch.cat(images_in_this_batch, dim=0)
+                    inputs_embeds[idx].masked_scatter_(images_seq_mask[idx].unsqueeze(-1).cuda(), images_in_this_batch)
+                idx += 1
+            
         return super(DeepseekOCRModel, self).forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
